@@ -126,23 +126,40 @@ def daily_direction(user):
     c = klines(user, "1d", 80)
 
     closes = [x["close"] for x in c]
-    highs = [x["high"] for x in c]
-    lows = [x["low"] for x in c]
-
     last = c[-1]
+
     ema20 = ema(closes[-40:], 20)
     ema60 = ema(closes[-70:], 60)
 
-    recent_high = max(highs[-21:-1])
-    recent_low = min(lows[-21:-1])
+    close = last["close"]
 
-    if last["close"] > recent_high and ema20 > ema60:
+    # 新版日線判斷（比較符合趨勢盤）
+    if ema20 > ema60 and close > ema20:
         return "LONG"
 
-    if last["close"] < recent_low and ema20 < ema60:
+    if ema20 < ema60 and close < ema20:
         return "SHORT"
 
     return "RANGE"
+
+
+    
+
+    
+
+    
+    
+    
+
+    
+    
+
+    
+
+    
+        
+
+    
 
 def score_1h(user):
     c = klines(user, "1h", 80)
