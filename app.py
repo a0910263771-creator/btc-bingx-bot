@@ -7,7 +7,7 @@ app = Flask(__name__)
 BASE_URL = "https://open-api.bingx.com"
 MASTER_TOKEN = os.getenv("MASTER_TOKEN", "888888")
 
-MIN_SCORE = 75
+MIN_SCORE = 50
 RISK_DIVISOR = 10
 MAX_UNITS = 6
 VOLUME_MULTIPLIER = 1.5
