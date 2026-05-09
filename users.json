@@ -1,9 +1,12 @@
+
+
+
 {
   "demo": {
-    "api_key": "你的BingX_API_KEY",
-    "api_secret": "你的BingX_SECRET",
+    "api_key": "UYj9JtKYnWI3jQYTxS4pBNRJuVWKl4wgus4sJBfcpH7K6OFik8Nzs6TArcELOBXf9xKS076KLnvDgbKPCZOw",
+    "api_secret": "CB5O00Iwt8eRURlswQCtDFoRq2AOU74CvqtdEmX9zjKAahljEqVR425Rya0wbUkpjQzK9FUhRZOK1ncf9yLcg",
     "symbol": "BTC-USDT",
-    "trade_token": "123456",
+    "trade_token": "my8888",
     "enabled": true
   }
 }
