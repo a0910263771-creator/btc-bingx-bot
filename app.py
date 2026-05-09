@@ -42,4 +42,4 @@ def bingx_post(path, params=None):
 def check_token():
     return TRADE_TOKEN and request.args.get("token") == TRADE_TOKEN
 
-def get_available_usdt
+def get_available_usdt():
