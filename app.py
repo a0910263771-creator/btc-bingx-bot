@@ -5,7 +5,7 @@ from flask import Flask, jsonify, request
 app = Flask(__name__)
 
 BASE_URL = "https://open-api.bingx.com"
-MASTER_TOKEN = os.getenv("MASTER_TOKEN", "admin123")
+MASTER_TOKEN = os.getenv("MASTER_TOKEN", "888888")
 
 MIN_SCORE = 75
 RISK_DIVISOR = 10
