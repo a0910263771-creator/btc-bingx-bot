@@ -1,0 +1,9 @@
+{
+  "demo": {
+    "api_key": "你的BingX_API_KEY",
+    "api_secret": "你的BingX_SECRET",
+    "symbol": "BTC-USDT",
+    "trade_token": "123456",
+    "enabled": true
+  }
+}
