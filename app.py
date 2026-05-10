@@ -4,6 +4,7 @@ import hmac
 import hashlib
 import json
 import requests
+import threading
 from urllib.parse import urlencode
 from flask import Flask, jsonify, request, Response
 
@@ -551,11 +552,7 @@ def run_all():
     })
 
 
-@app.route("/cron")
-def cron():
-    if request.args.get("token") != MASTER_TOKEN:
-        return Response("BAD", status=403, mimetype="text/plain")
-
+def run_bot_job():
     users_data = load_users()
 
     for user_id, user in users_data.items():
@@ -570,6 +567,14 @@ def cron():
 
         except Exception:
             pass
+
+
+@app.route("/cron")
+def cron():
+    if request.args.get("token") != MASTER_TOKEN:
+        return Response("BAD", status=403, mimetype="text/plain")
+
+    threading.Thread(target=run_bot_job).start()
 
     return Response("OK", status=200, mimetype="text/plain")
 
