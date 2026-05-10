@@ -577,6 +577,10 @@ def cron():
     threading.Thread(target=run_bot_job).start()
 
     return Response("OK", status=200, mimetype="text/plain")
+    @app.route("/cron204")
+def cron204():
+    threading.Thread(target=run_bot_job).start()
+    return "", 204
 
 
 
