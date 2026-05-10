@@ -1,70 +1,44 @@
 import os, time, hmac, hashlib, requests, json
 from urllib.parse import urlencode
 from flask import Flask, jsonify, request, Response
-@app.route("/cron")
-def cron():
-    if request.args.get("token") != MASTER_TOKEN:
-        return Response("BAD", status=403, mimetype="text/plain")
 
-    users = load_users()
-    done = 0
-    traded = 0
-    errors = 0
-
-    for user_id, user in users.items():
-        if not user.get("enabled", False):
-            continue
-
-        done += 1
-
-        try:
-            sig = strategy_signal(user)
-
-            if sig["action"] != "WAIT":
-                market_order(user, sig["action"])
-                traded += 1
-
-        except Exception:
-            errors += 1
-
-    return Response(
-        f"OK users={done} traded={traded} errors={errors}",
-        status=200,
-        mimetype="text/plain"
-    )
 app = Flask(__name__)
 
 BASE_URL = "https://open-api.bingx.com"
-MASTER_TOKEN = os.getenv("MASTER_TOKEN", "888888")
+
+MASTER_TOKEN = "888888"
 
 MIN_SCORE = 50
 RISK_DIVISOR = 10
 MAX_UNITS = 6
 VOLUME_MULTIPLIER = 1.5
 
+
 def load_users():
     with open("users.json", "r") as f:
         return json.load(f)
 
+
 def sign(params, api_secret):
     query = urlencode(sorted(params.items()))
     return hmac.new(api_secret.encode(), query.encode(), hashlib.sha256).hexdigest()
+
 
 def bingx_get(path, api_key, api_secret, params=None):
     params = params or {}
     params["timestamp"] = int(time.time() * 1000)
     params["signature"] = sign(params, api_secret)
     headers = {"X-BX-APIKEY": api_key}
-    r = requests.get(BASE_URL + path, params=params, headers=headers, timeout=10)
-    return r.json()
+    return requests.get(BASE_URL + path, params=params, headers=headers, timeout=10).json()
+
 
 def bingx_post(path, api_key, api_secret, params=None):
     params = params or {}
     params["timestamp"] = int(time.time() * 1000)
     params["signature"] = sign(params, api_secret)
     headers = {"X-BX-APIKEY": api_key}
-    r = requests.post(BASE_URL + path, params=params, headers=headers, timeout=10)
-    return r.json()
+    return requests.post(BASE_URL + path, params=params, headers=headers, timeout=10).json()
+
 
 def ema(values, period):
     k = 2 / (period + 1)
@@ -73,9 +47,10 @@ def ema(values, period):
         e = v * k + e * (1 - k)
     return e
 
+
 def get_user(user_id):
-    users = load_users()
-    return users.get(user_id)
+    return load_users().get(user_id)
+
 
 def klines(user, interval, limit=80):
     data = bingx_get(
@@ -112,8 +87,8 @@ def klines(user, interval, limit=80):
                 "volume": float(k[5])
             })
 
-    candles = sorted(candles, key=lambda x: x["time"])
-    return candles
+    return sorted(candles, key=lambda x: x["time"])
+
 
 def get_balance(user):
     data = bingx_get(
@@ -124,6 +99,7 @@ def get_balance(user):
     b = data.get("data", {}).get("balance", {})
     return float(b.get("availableMargin", 0))
 
+
 def get_price(user):
     data = bingx_get(
         "/openApi/swap/v2/quote/price",
@@ -131,7 +107,8 @@ def get_price(user):
         user["api_secret"],
         {"symbol": user["symbol"]}
     )
-    return float(data.get("data", {}).get("price"))
+    return float(data.get("data", {}).get("price", 0))
+
 
 def get_positions_raw(user):
     return bingx_get(
@@ -140,6 +117,7 @@ def get_positions_raw(user):
         user["api_secret"],
         {"symbol": user["symbol"]}
     )
+
 
 def get_positions(user):
     data = get_positions_raw(user).get("data", [])
@@ -152,6 +130,7 @@ def get_positions(user):
 
     return result
 
+
 def daily_direction(user):
     c = klines(user, "1d", 80)
 
@@ -160,10 +139,8 @@ def daily_direction(user):
 
     ema20 = ema(closes[-40:], 20)
     ema60 = ema(closes[-70:], 60)
-
     close = last["close"]
 
-    # 新版日線判斷（比較符合趨勢盤）
     if ema20 > ema60 and close > ema20:
         return "LONG"
 
@@ -172,24 +149,6 @@ def daily_direction(user):
 
     return "RANGE"
 
-
-    
-
-    
-
-    
-    
-    
-
-    
-    
-
-    
-
-    
-        
-
-    
 
 def score_1h(user):
     c = klines(user, "1h", 80)
@@ -264,6 +223,7 @@ def score_1h(user):
         "close": close
     }
 
+
 def confirm_15m(user, direction):
     c = klines(user, "15m", 60)
 
@@ -290,6 +250,7 @@ def confirm_15m(user, direction):
 
     return False, "15m 未確認"
 
+
 def total_units(user):
     available = get_balance(user)
     unit_usdt = max(available / RISK_DIVISOR, 1)
@@ -302,12 +263,14 @@ def total_units(user):
 
     return round(total_notional / unit_usdt, 2)
 
+
 def order_qty(user):
     usdt = get_balance(user)
     p = get_price(user)
     order_usdt = usdt / RISK_DIVISOR
     qty = round(order_usdt / p, 4)
     return qty, usdt, p, order_usdt
+
 
 def market_order(user, direction):
     qty, usdt, p, order_usdt = order_qty(user)
@@ -342,6 +305,7 @@ def market_order(user, direction):
         "result": result
     }
 
+
 def strategy_signal(user):
     daily = daily_direction(user)
     one_h = score_1h(user)
@@ -353,9 +317,11 @@ def strategy_signal(user):
 
     if units >= MAX_UNITS:
         reasons.append("總持倉已達 6 單位")
+
     elif daily != "RANGE" and one_h["direction"] == daily and one_h["score"] >= MIN_SCORE and confirm:
         action = one_h["direction"]
-        reasons.append("日線方向 + 1H >=75 + 15m 確認")
+        reasons.append("日線方向 + 1H 達標 + 15m 確認")
+
     else:
         reasons.append("條件未齊，不進場")
 
@@ -370,9 +336,11 @@ def strategy_signal(user):
         "reasons": reasons
     }
 
+
 @app.route("/")
 def home():
     return "多人版 BTC BingX Bot 已啟動"
+
 
 @app.route("/users")
 def users():
@@ -385,6 +353,7 @@ def users():
         "ok": True,
         "users": list(users.keys())
     })
+
 
 @app.route("/user/<user_id>/balance")
 def user_balance(user_id):
@@ -399,6 +368,7 @@ def user_balance(user_id):
         user["api_secret"]
     ))
 
+
 @app.route("/user/<user_id>/positions")
 def user_positions(user_id):
     user = get_user(user_id)
@@ -408,6 +378,7 @@ def user_positions(user_id):
 
     return jsonify(get_positions_raw(user))
 
+
 @app.route("/user/<user_id>/signal")
 def user_signal(user_id):
     user = get_user(user_id)
@@ -416,6 +387,7 @@ def user_signal(user_id):
         return jsonify({"ok": False})
 
     return jsonify(strategy_signal(user))
+
 
 @app.route("/user/<user_id>/auto_trade")
 def user_auto_trade(user_id):
@@ -447,8 +419,10 @@ def user_auto_trade(user_id):
         "trade": True,
         "action": sig["action"],
         "symbol": user["symbol"],
-        "qty": order.get("qty")
+        "qty": order.get("qty"),
+        "order": order
     })
+
 
 @app.route("/run_all")
 def run_all():
@@ -482,6 +456,40 @@ def run_all():
         "traded": traded,
         "errors": errors
     })
+
+
+@app.route("/cron")
+def cron():
+    if request.args.get("token") != MASTER_TOKEN:
+        return Response("BAD", status=403, mimetype="text/plain")
+
+    users = load_users()
+    done = 0
+    traded = 0
+    errors = 0
+
+    for user_id, user in users.items():
+        if not user.get("enabled", False):
+            continue
+
+        done += 1
+
+        try:
+            sig = strategy_signal(user)
+
+            if sig["action"] != "WAIT":
+                market_order(user, sig["action"])
+                traded += 1
+
+        except Exception:
+            errors += 1
+
+    return Response(
+        f"OK users={done} traded={traded} errors={errors}",
+        status=200,
+        mimetype="text/plain"
+    )
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
