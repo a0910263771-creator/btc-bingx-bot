@@ -572,11 +572,11 @@ def run_bot_job():
 @app.route("/cron")
 def cron():
         if request.args.get("token") != MASTER_TOKEN:
-        return Response("BAD", status=403, mimetype="text/plain")
+            return Response("BAD", status=403, mimetype="text/plain")
 
         threading.Thread(target=run_bot_job).start()
 
-        return Response("OK", status=200, mimetype="text/plain")
+    return Response("OK", status=200, mimetype="text/plain")
 @app.route("/cron204")
 def cron204():
         threading.Thread(target=run_bot_job).start()
