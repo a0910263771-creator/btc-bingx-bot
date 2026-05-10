@@ -26,41 +26,30 @@ def load_users():
         return json.load(f)
 
 
-def sign(params, api_secret):
+def build_signed_url(path, api_secret, params=None):
+    params = params or {}
+    params["timestamp"] = int(time.time() * 1000)
+
     query = "&".join([f"{k}={params[k]}" for k in sorted(params)])
-    return hmac.new(
-        api_secret.encode("utf-8"),
+    signature = hmac.new(
+        api_secret.strip().encode("utf-8"),
         query.encode("utf-8"),
         hashlib.sha256
     ).hexdigest()
 
+    return BASE_URL + path + "?" + query + "&signature=" + signature
+
 
 def bingx_get(path, api_key, api_secret, params=None):
-    params = params or {}
-    params["timestamp"] = int(time.time() * 1000)
-    params["signature"] = sign(params, api_secret)
-    headers = {"X-BX-APIKEY": api_key}
-
-    return requests.get(
-        BASE_URL + path,
-        params=params,
-        headers=headers,
-        timeout=10
-    ).json()
+    url = build_signed_url(path, api_secret, params)
+    headers = {"X-BX-APIKEY": api_key.strip()}
+    return requests.get(url, headers=headers, timeout=10).json()
 
 
 def bingx_post(path, api_key, api_secret, params=None):
-    params = params or {}
-    params["timestamp"] = int(time.time() * 1000)
-    params["signature"] = sign(params, api_secret)
-    headers = {"X-BX-APIKEY": api_key}
-
-    return requests.post(
-        BASE_URL + path,
-        params=params,
-        headers=headers,
-        timeout=10
-    ).json()
+    url = build_signed_url(path, api_secret, params)
+    headers = {"X-BX-APIKEY": api_key.strip()}
+    return requests.post(url, headers=headers, timeout=10).json()
 
 
 def ema(values, period):
