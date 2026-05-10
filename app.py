@@ -1,4 +1,4 @@
-import os, time, hmac, hashlib, requests, json
+ㄟimport os, time, hmac, hashlib, requests, json
 from urllib.parse import urlencode
 from flask import Flask, jsonify, request, Response
 
@@ -379,8 +379,8 @@ def user_auto_trade(user_id):
         if not user:
             return jsonify({"ok": False, "error": "找不到 user"})
 
-        if request.args.get("token") != user["trade_token"]:
-            return jsonify({"ok": False, "error": "trade_token 錯誤"})
+        
+            
 
         if not user.get("enabled", False):
             return jsonify({"ok": False, "error": "此用戶未啟用"})
