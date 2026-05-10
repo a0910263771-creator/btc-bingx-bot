@@ -5,7 +5,6 @@ from flask import Flask, jsonify, request, Response
 app = Flask(__name__)
 
 BASE_URL = "https://open-api.bingx.com"
-
 MASTER_TOKEN = "888888"
 
 MIN_SCORE = 50
@@ -57,11 +56,7 @@ def klines(user, interval, limit=80):
         "/openApi/swap/v3/quote/klines",
         user["api_key"],
         user["api_secret"],
-        {
-            "symbol": user["symbol"],
-            "interval": interval,
-            "limit": limit
-        }
+        {"symbol": user["symbol"], "interval": interval, "limit": limit}
     )
 
     raw = data.get("data", [])
@@ -133,7 +128,6 @@ def get_positions(user):
 
 def daily_direction(user):
     c = klines(user, "1d", 80)
-
     closes = [x["close"] for x in c]
     last = c[-1]
 
@@ -206,20 +200,21 @@ def score_1h(user):
         short_reasons.append("H 壓力偏空")
 
     if long_score >= short_score:
-        direction = "LONG"
-        score = long_score
-        reasons = long_reasons
-    else:
-        direction = "SHORT"
-        score = short_score
-        reasons = short_reasons
+        return {
+            "direction": "LONG",
+            "score": long_score,
+            "long_score": long_score,
+            "short_score": short_score,
+            "reasons": long_reasons,
+            "close": close
+        }
 
     return {
-        "direction": direction,
-        "score": score,
+        "direction": "SHORT",
+        "score": short_score,
         "long_score": long_score,
         "short_score": short_score,
-        "reasons": reasons,
+        "reasons": short_reasons,
         "close": close
     }
 
@@ -296,7 +291,10 @@ def market_order(user, direction):
         params
     )
 
+    success = str(result.get("code")) == "0"
+
     return {
+        "ok": success,
         "qty": qty,
         "order_usdt": order_usdt,
         "price": p,
@@ -346,82 +344,69 @@ def home():
 def users():
     if request.args.get("token") != MASTER_TOKEN:
         return jsonify({"ok": False})
-
-    users = load_users()
-
-    return jsonify({
-        "ok": True,
-        "users": list(users.keys())
-    })
+    return jsonify({"ok": True, "users": list(load_users().keys())})
 
 
 @app.route("/user/<user_id>/balance")
 def user_balance(user_id):
     user = get_user(user_id)
-
     if not user:
-        return jsonify({"ok": False})
-
-    return jsonify(bingx_get(
-        "/openApi/swap/v2/user/balance",
-        user["api_key"],
-        user["api_secret"]
-    ))
+        return jsonify({"ok": False, "error": "找不到 user"})
+    return jsonify(bingx_get("/openApi/swap/v2/user/balance", user["api_key"], user["api_secret"]))
 
 
 @app.route("/user/<user_id>/positions")
 def user_positions(user_id):
     user = get_user(user_id)
-
     if not user:
-        return jsonify({"ok": False})
-
+        return jsonify({"ok": False, "error": "找不到 user"})
     return jsonify(get_positions_raw(user))
 
 
 @app.route("/user/<user_id>/signal")
 def user_signal(user_id):
     user = get_user(user_id)
-
     if not user:
-        return jsonify({"ok": False})
-
+        return jsonify({"ok": False, "error": "找不到 user"})
     return jsonify(strategy_signal(user))
 
 
 @app.route("/user/<user_id>/auto_trade")
 def user_auto_trade(user_id):
-    user = get_user(user_id)
+    try:
+        user = get_user(user_id)
 
-    if not user:
-        return jsonify({"ok": False})
+        if not user:
+            return jsonify({"ok": False, "error": "找不到 user"})
 
-    if request.args.get("token") != user["trade_token"]:
-        return jsonify({"ok": False})
+        if request.args.get("token") != user["trade_token"]:
+            return jsonify({"ok": False, "error": "trade_token 錯誤"})
 
-    if not user.get("enabled", False):
-        return jsonify({"ok": False})
+        if not user.get("enabled", False):
+            return jsonify({"ok": False, "error": "此用戶未啟用"})
 
-    sig = strategy_signal(user)
+        sig = strategy_signal(user)
 
-    if sig["action"] == "WAIT":
+        if sig["action"] == "WAIT":
+            return jsonify({
+                "ok": True,
+                "trade": False,
+                "action": "WAIT",
+                "signal": sig
+            })
+
+        order = market_order(user, sig["action"])
+
         return jsonify({
-            "ok": True,
-            "trade": False,
-            "action": "WAIT",
-            "symbol": user["symbol"]
+            "ok": order.get("ok", False),
+            "trade": order.get("ok", False),
+            "action": sig["action"],
+            "symbol": user["symbol"],
+            "order": order
         })
 
-    order = market_order(user, sig["action"])
-
-    return jsonify({
-        "ok": True,
-        "trade": True,
-        "action": sig["action"],
-        "symbol": user["symbol"],
-        "qty": order.get("qty"),
-        "order": order
-    })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
 
 
 @app.route("/run_all")
@@ -444,8 +429,11 @@ def run_all():
             sig = strategy_signal(user)
 
             if sig["action"] != "WAIT":
-                market_order(user, sig["action"])
-                traded += 1
+                order = market_order(user, sig["action"])
+                if order.get("ok"):
+                    traded += 1
+                else:
+                    errors += 1
 
         except Exception:
             errors += 1
@@ -478,8 +466,11 @@ def cron():
             sig = strategy_signal(user)
 
             if sig["action"] != "WAIT":
-                market_order(user, sig["action"])
-                traded += 1
+                order = market_order(user, sig["action"])
+                if order.get("ok"):
+                    traded += 1
+                else:
+                    errors += 1
 
         except Exception:
             errors += 1
