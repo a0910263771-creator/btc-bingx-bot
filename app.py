@@ -1,7 +1,37 @@
 import os, time, hmac, hashlib, requests, json
 from urllib.parse import urlencode
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, Response
+@app.route("/cron")
+def cron():
+    if request.args.get("token") != MASTER_TOKEN:
+        return Response("BAD", status=403, mimetype="text/plain")
 
+    users = load_users()
+    done = 0
+    traded = 0
+    errors = 0
+
+    for user_id, user in users.items():
+        if not user.get("enabled", False):
+            continue
+
+        done += 1
+
+        try:
+            sig = strategy_signal(user)
+
+            if sig["action"] != "WAIT":
+                market_order(user, sig["action"])
+                traded += 1
+
+        except Exception:
+            errors += 1
+
+    return Response(
+        f"OK users={done} traded={traded} errors={errors}",
+        status=200,
+        mimetype="text/plain"
+    )
 app = Flask(__name__)
 
 BASE_URL = "https://open-api.bingx.com"
