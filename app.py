@@ -35,7 +35,6 @@ def bingx_get(path, api_key, api_secret, params=None):
     params = params or {}
     params["timestamp"] = int(time.time() * 1000)
     params["signature"] = sign(params, api_secret)
-
     headers = {"X-BX-APIKEY": api_key}
 
     return requests.get(
@@ -50,7 +49,6 @@ def bingx_post(path, api_key, api_secret, params=None):
     params = params or {}
     params["timestamp"] = int(time.time() * 1000)
     params["signature"] = sign(params, api_secret)
-
     headers = {"X-BX-APIKEY": api_key}
 
     return requests.post(
@@ -399,6 +397,23 @@ def token_ok(user):
     return False
 
 
+def run_bot_job():
+    users_data = load_users()
+
+    for user_id, user in users_data.items():
+        if not user.get("enabled", False):
+            continue
+
+        try:
+            sig = strategy_signal(user)
+
+            if sig["action"] != "WAIT":
+                market_order(user, sig["action"])
+
+        except Exception:
+            pass
+
+
 @app.route("/")
 def home():
     return "多人版 BTC BingX Bot 已啟動"
@@ -499,89 +514,33 @@ def run_all():
     if request.args.get("token") != MASTER_TOKEN:
         return jsonify({"ok": False, "error": "master_token錯誤"})
 
-    users_data = load_users()
-    done = 0
-    traded = 0
-    errors = 0
-    details = {}
-
-    for user_id, user in users_data.items():
-        if not user.get("enabled", False):
-            details[user_id] = {"ok": False, "message": "未啟用"}
-            continue
-
-        done += 1
-
-        try:
-            sig = strategy_signal(user)
-
-            if sig["action"] == "WAIT":
-                details[user_id] = {
-                    "ok": True,
-                    "trade": False,
-                    "action": "WAIT"
-                }
-            else:
-                order = market_order(user, sig["action"])
-
-                if order.get("ok"):
-                    traded += 1
-                else:
-                    errors += 1
-
-                details[user_id] = {
-                    "ok": order.get("ok", False),
-                    "trade": order.get("ok", False),
-                    "action": sig["action"],
-                    "order": order
-                }
-
-        except Exception as e:
-            errors += 1
-            details[user_id] = {
-                "ok": False,
-                "error": str(e)
-            }
+    threading.Thread(target=run_bot_job).start()
 
     return jsonify({
         "ok": True,
-        "users": done,
-        "traded": traded,
-        "errors": errors,
-        "details": details
+        "message": "started"
     })
-
-
-def run_bot_job():
-    users_data = load_users()
-
-    for user_id, user in users_data.items():
-        if not user.get("enabled", False):
-            continue
-
-        try:
-            sig = strategy_signal(user)
-
-            if sig["action"] != "WAIT":
-                market_order(user, sig["action"])
-
-        except Exception:
-            pass
 
 
 @app.route("/cron")
 def cron():
-        if request.args.get("token") != MASTER_TOKEN:
-            return Response("BAD", status=403, mimetype="text/plain")
+    if request.args.get("token") != MASTER_TOKEN:
+        return Response("BAD", status=403, mimetype="text/plain")
 
-        threading.Thread(target=run_bot_job).start()
+    threading.Thread(target=run_bot_job).start()
 
     return Response("OK", status=200, mimetype="text/plain")
+
+
 @app.route("/cron204")
 def cron204():
-        threading.Thread(target=run_bot_job).start()
-        return "", 204
+    if request.args.get("token") != MASTER_TOKEN:
+        return Response("", status=403, mimetype="text/plain")
+
+    threading.Thread(target=run_bot_job).start()
+
+    return Response("", status=204, mimetype="text/plain")
 
 
 if __name__ == "__main__":
-        app.run(host="0.0.0.0", port=10000)
+    app.run(host="0.0.0.0", port=10000)
