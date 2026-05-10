@@ -256,27 +256,19 @@ def confirm_15m(user, direction):
     c = klines(user, "15m", 60)
 
     closes = [x["close"] for x in c]
-    highs = [x["high"] for x in c]
-    lows = [x["low"] for x in c]
 
     last = c[-1]
-    prev_high = max(highs[-13:-1])
-    prev_low = min(lows[-13:-1])
+    close = last["close"]
+
     ema20 = ema(closes[-40:], 20)
 
     if direction == "LONG":
-        if last["close"] > prev_high:
-            return True, "15m 突破追多"
-
-        if last["low"] <= ema20 and last["close"] > ema20:
-            return True, "15m 回踩轉強做多"
+        if close > ema20:
+            return True, "15m 價格站上 EMA20，放寬確認做多"
 
     if direction == "SHORT":
-        if last["close"] < prev_low:
-            return True, "15m 跌破追空"
-
-        if last["high"] >= ema20 and last["close"] < ema20:
-            return True, "15m 反壓轉弱做空"
+        if close < ema20:
+            return True, "15m 價格跌破 EMA20，放寬確認做空"
 
     return False, "15m 未確認"
 
