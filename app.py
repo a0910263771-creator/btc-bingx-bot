@@ -324,8 +324,8 @@ def market_order(user, direction):
         user["api_secret"],
         params
     )
-
-    success = str(result.get("code")) == "0"
+    print("ORDER_RESULT", result, flush=True)
+        success = str(result.get("code")) == "0"
 
     return {
         "ok": success,
