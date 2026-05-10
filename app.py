@@ -283,8 +283,8 @@ def order_qty(user):
     usdt = get_balance(user)
     p = get_price(user)
 
-    order_usdt = usdt / RISK_DIVISOR
-    qty = round(order_usdt / p, 4)
+    order_usdt = (usdt / RISK_DIVISOR) * 30
+qty = round(order_usdt / p, 4)
 
     return qty, usdt, p, order_usdt
 
