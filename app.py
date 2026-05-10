@@ -554,38 +554,25 @@ def run_all():
 @app.route("/cron")
 def cron():
     if request.args.get("token") != MASTER_TOKEN:
-        return Response("BAD TOKEN", status=403, mimetype="text/plain")
+        return Response("BAD", status=403, mimetype="text/plain")
 
     users_data = load_users()
-    done = 0
-    traded = 0
-    errors = 0
 
     for user_id, user in users_data.items():
         if not user.get("enabled", False):
             continue
 
-        done += 1
-
         try:
             sig = strategy_signal(user)
 
             if sig["action"] != "WAIT":
-                order = market_order(user, sig["action"])
-
-                if order.get("ok"):
-                    traded += 1
-                else:
-                    errors += 1
+                market_order(user, sig["action"])
 
         except Exception:
-            errors += 1
+            pass
 
-    return Response(
-        f"OK users={done} traded={traded} errors={errors}",
-        status=200,
-        mimetype="text/plain"
-    )
+    return Response("OK", status=200, mimetype="text/plain")
+
 
 
 if __name__ == "__main__":
