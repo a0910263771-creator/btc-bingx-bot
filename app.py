@@ -325,7 +325,7 @@ def market_order(user, direction):
         params
     )
     print("ORDER_RESULT", result, flush=True)
-        success = str(result.get("code")) == "0"
+    success = str(result.get("code")) == "0"
 
     return {
         "ok": success,
