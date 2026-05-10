@@ -27,8 +27,12 @@ def load_users():
 
 
 def sign(params, api_secret):
-    query = urlencode(sorted(params.items()))
-    return hmac.new(api_secret.encode(), query.encode(), hashlib.sha256).hexdigest()
+    query = "&".join([f"{k}={params[k]}" for k in sorted(params)])
+    return hmac.new(
+        api_secret.encode("utf-8"),
+        query.encode("utf-8"),
+        hashlib.sha256
+    ).hexdigest()
 
 
 def bingx_get(path, api_key, api_secret, params=None):
