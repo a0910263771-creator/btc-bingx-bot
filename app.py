@@ -2,7 +2,9 @@ import os, time, hmac, json, hashlib, threading, requests
 from flask import Flask, jsonify, request, Response
 
 app = Flask(__name__)
-
+@app.route("/ping")
+def ping():
+    return "ok", 200
 BASE_URL = "https://open-api.bingx.com"
 MASTER_TOKEN = os.getenv("MASTER_TOKEN", "888888")
 
