@@ -1,25 +1,17 @@
-import os
-import time
-import hmac
-import json
-import hashlib
-import threading
-import requests
+import os, time, hmac, json, hashlib, threading, requests
 from flask import Flask, jsonify, request, Response
 
 app = Flask(__name__)
 
 BASE_URL = "https://open-api.bingx.com"
-
 MASTER_TOKEN = os.getenv("MASTER_TOKEN", "888888")
-TRADE_TOKEN = os.getenv("TRADE_TOKEN", "")
 
 MIN_SCORE = 50
 RISK_DIVISOR = 10
 LEVERAGE = 30
 MAX_UNITS = 4
-VOLUME_MULTIPLIER = 1.5
 STATE_FILE = "state.json"
+VOLUME_MULTIPLIER = 1.5
 
 
 def load_users():
@@ -42,76 +34,73 @@ def save_state(state):
         json.dump(state, f, ensure_ascii=False, indent=2)
 
 
-def user_state(state, user_id):
+def get_state(state, user_id):
     if user_id not in state:
         state[user_id] = {
             "stage": "IDLE",
             "main_direction": None,
             "hedge_direction": None,
-            "created_at": int(time.time())
+            "rescue_direction": None,
+            "rescue_entry": 0,
+            "mistakes_today": 0,
+            "updated_at": int(time.time())
         }
     return state[user_id]
+
+
+def reset_state(s):
+    s["stage"] = "IDLE"
+    s["main_direction"] = None
+    s["hedge_direction"] = None
+    s["rescue_direction"] = None
+    s["rescue_entry"] = 0
+    s["updated_at"] = int(time.time())
 
 
 def opposite(direction):
     return "SHORT" if direction == "LONG" else "LONG"
 
 
-def build_signed_url(path, api_secret, params=None):
+def signed_url(path, api_secret, params=None):
     params = params or {}
     params["timestamp"] = int(time.time() * 1000)
-
     query = "&".join([f"{k}={params[k]}" for k in sorted(params)])
-    signature = hmac.new(
+    sig = hmac.new(
         api_secret.strip().encode("utf-8"),
         query.encode("utf-8"),
         hashlib.sha256
     ).hexdigest()
+    return BASE_URL + path + "?" + query + "&signature=" + sig
 
-    return BASE_URL + path + "?" + query + "&signature=" + signature
 
-
-def bingx_get(path, api_key, api_secret, params=None):
-    url = build_signed_url(path, api_secret, params)
-    headers = {"X-BX-APIKEY": api_key.strip()}
+def bingx_get(path, user, params=None):
+    url = signed_url(path, user["api_secret"], params)
+    headers = {"X-BX-APIKEY": user["api_key"].strip()}
     return requests.get(url, headers=headers, timeout=10).json()
 
 
-def bingx_post(path, api_key, api_secret, params=None):
-    url = build_signed_url(path, api_secret, params)
-    headers = {"X-BX-APIKEY": api_key.strip()}
+def bingx_post(path, user, params=None):
+    url = signed_url(path, user["api_secret"], params)
+    headers = {"X-BX-APIKEY": user["api_key"].strip()}
     return requests.post(url, headers=headers, timeout=10).json()
 
 
 def ema(values, period):
     if not values:
         return 0
-
     k = 2 / (period + 1)
     e = values[0]
-
     for v in values[1:]:
         e = v * k + e * (1 - k)
-
     return e
-
-
-def get_user(user_id):
-    return load_users().get(user_id)
 
 
 def klines(user, interval, limit=80):
     data = bingx_get(
         "/openApi/swap/v3/quote/klines",
-        user["api_key"],
-        user["api_secret"],
-        {
-            "symbol": user["symbol"],
-            "interval": interval,
-            "limit": limit
-        }
+        user,
+        {"symbol": user["symbol"], "interval": interval, "limit": limit}
     )
-
     raw = data.get("data", [])
     candles = []
 
@@ -139,81 +128,60 @@ def klines(user, interval, limit=80):
 
 
 def get_balance(user):
-    data = bingx_get(
-        "/openApi/swap/v2/user/balance",
-        user["api_key"],
-        user["api_secret"]
-    )
-
+    data = bingx_get("/openApi/swap/v2/user/balance", user)
     b = data.get("data", {}).get("balance", {})
-    return float(
-        b.get("balance")
-        or b.get("equity")
-        or b.get("availableMargin")
-        or 0
-    )
+    return float(b.get("availableMargin") or b.get("availableBalance") or 0)
 
 
 def get_price(user):
     data = bingx_get(
         "/openApi/swap/v2/quote/price",
-        user["api_key"],
-        user["api_secret"],
+        user,
         {"symbol": user["symbol"]}
     )
-
     return float(data.get("data", {}).get("price", 0))
 
 
 def get_positions_raw(user):
     return bingx_get(
         "/openApi/swap/v2/user/positions",
-        user["api_key"],
-        user["api_secret"],
+        user,
         {"symbol": user["symbol"]}
     )
 
 
-def pos_amt(pos):
-    return abs(float(pos.get("positionAmt", pos.get("positionAmount", 0))))
+def pos_amt(p):
+    return abs(float(p.get("positionAmt", p.get("positionAmount", 0))))
 
 
-def pos_side(pos):
-    return pos.get("positionSide", "")
+def pos_side(p):
+    return p.get("positionSide", "")
 
 
-def pos_entry(pos):
+def pos_entry(p):
     return float(
-        pos.get("avgPrice")
-        or pos.get("averagePrice")
-        or pos.get("entryPrice")
+        p.get("avgPrice")
+        or p.get("averagePrice")
+        or p.get("entryPrice")
         or 0
     )
 
 
 def get_positions(user):
     data = get_positions_raw(user).get("data", [])
-    result = []
-
-    for p in data:
-        if pos_amt(p) > 0:
-            result.append(p)
-
-    return result
+    return [p for p in data if pos_amt(p) > 0]
 
 
 def position_by_side(user, direction):
     total_amt = 0
-    weighted_price = 0
+    total_cost = 0
 
     for p in get_positions(user):
         if pos_side(p) == direction:
             amt = pos_amt(p)
             entry = pos_entry(p)
-
-            if amt > 0 and entry > 0:
-                total_amt += amt
-                weighted_price += amt * entry
+            total_amt += amt
+            total_cost += amt * entry
 
     if total_amt <= 0:
         return None
@@ -221,18 +189,17 @@ def position_by_side(user, direction):
     return {
         "direction": direction,
         "amount": total_amt,
-        "entry": weighted_price / total_amt
+        "entry": total_cost / total_amt
     }
 
 
 def pnl_percent(user, direction):
-    pos = position_by_side(user, direction)
-
-    if not pos:
+    p = position_by_side(user, direction)
+    if not p:
         return None
 
     price = get_price(user)
-    entry = pos["entry"]
+    entry = p["entry"]
 
     if direction == "LONG":
         raw = (price - entry) / entry * 100
@@ -242,46 +209,50 @@ def pnl_percent(user, direction):
     return raw * LEVERAGE
 
 
-def total_notional(user):
+def pnl_from_entry(user, direction, entry):
+    if not entry:
+        return None
+
+    price = get_price(user)
+
+    if direction == "LONG":
+        raw = (price - entry) / entry * 100
+    else:
+        raw = (entry - price) / entry * 100
+
+    return raw * LEVERAGE
+
+
+def unit_notional(user):
+    return (get_balance(user) / RISK_DIVISOR) * LEVERAGE
+
+
+def total_units(user):
+    unit = unit_notional(user)
+    if unit <= 0:
+        return 0
+
     price = get_price(user)
     total = 0
 
     for p in get_positions(user):
         total += pos_amt(p) * price
 
-    return total
-
-
-def unit_notional(user):
-    balance = get_balance(user)
-    return (balance / RISK_DIVISOR) * LEVERAGE
-
-
-def total_units(user):
-    unit = unit_notional(user)
-
-    if unit <= 0:
-        return 0
-
-    return round(total_notional(user) / unit, 2)
+    return round(total / unit, 2)
 
 
 def daily_direction(user):
     c = klines(user, "1d", 80)
-
     closes = [x["close"] for x in c]
-    last = c[-1]
+    close = closes[-1]
 
     ema20 = ema(closes[-40:], 20)
     ema60 = ema(closes[-70:], 60)
-    close = last["close"]
 
     if ema20 > ema60 and close > ema20:
         return "LONG"
-
     if ema20 < ema60 and close < ema20:
         return "SHORT"
-
     return "RANGE"
 
 
@@ -302,7 +273,6 @@ def score_1h(user):
 
     ema20 = ema(closes[-40:], 20)
     ema50 = ema(closes[-60:], 50)
-
     mid = (prev_high + prev_low) / 2
 
     long_score = 0
@@ -341,30 +311,27 @@ def score_1h(user):
         short_reasons.append("H 壓力偏空")
 
     if long_score >= short_score:
-        direction = "LONG"
-        score = long_score
-        reasons = long_reasons
-    else:
-        direction = "SHORT"
-        score = short_score
-        reasons = short_reasons
+        return {
+            "direction": "LONG",
+            "score": long_score,
+            "long_score": long_score,
+            "short_score": short_score,
+            "reasons": long_reasons
+        }
 
     return {
-        "direction": direction,
-        "score": score,
+        "direction": "SHORT",
+        "score": short_score,
         "long_score": long_score,
         "short_score": short_score,
-        "reasons": reasons,
-        "close": close
+        "reasons": short_reasons
     }
 
 
 def confirm_15m(user, direction):
     c = klines(user, "15m", 60)
-
     closes = [x["close"] for x in c]
-    last = c[-1]
-    close = last["close"]
+    close = closes[-1]
     ema20 = ema(closes[-40:], 20)
 
     if direction == "LONG" and close > ema20:
@@ -385,7 +352,7 @@ def strategy_signal(user):
     reasons = []
 
     if daily == "RANGE":
-        reasons.append("日線盤整，不進場")
+        reasons.append("日線盤整")
 
     elif one_h["direction"] != daily:
         reasons.append("1H 與日線不同方向")
@@ -415,70 +382,50 @@ def strategy_signal(user):
 def order_qty(user, units=1):
     balance = get_balance(user)
     price = get_price(user)
-
     order_usdt = (balance / RISK_DIVISOR) * LEVERAGE * units
     qty = round(order_usdt / price, 4)
-
     return qty, balance, price, order_usdt
 
 
 def market_order(user, direction, units=1):
+    if total_units(user) + units > MAX_UNITS:
+        return {"ok": False, "error": "超過最大4單位"}
+
     qty, balance, price, order_usdt = order_qty(user, units)
 
     if qty <= 0:
-        return {
-            "ok": False,
-            "error": "可用資金不足",
-            "qty": qty,
-            "balance": balance
-        }
+        return {"ok": False, "error": "可用資金不足"}
 
     side = "BUY" if direction == "LONG" else "SELL"
-    position_side = direction
 
     params = {
         "symbol": user["symbol"],
         "side": side,
-        "positionSide": position_side,
+        "positionSide": direction,
         "type": "MARKET",
         "quantity": qty
     }
 
-    result = bingx_post(
-        "/openApi/swap/v2/trade/order",
-        user["api_key"],
-        user["api_secret"],
-        params
-    )
-
+    result = bingx_post("/openApi/swap/v2/trade/order", user, params)
     print("ORDER_RESULT", result, flush=True)
 
-    success = str(result.get("code")) == "0"
-
     return {
-        "ok": success,
-        "qty": qty,
+        "ok": str(result.get("code")) == "0",
+        "direction": direction,
         "units": units,
-        "order_usdt": order_usdt,
+        "qty": qty,
         "price": price,
-        "side": side,
-        "positionSide": position_side,
+        "order_usdt": order_usdt,
         "result": result
     }
 
 
-def close_position(user, direction):
-    pos = position_by_side(user, direction)
+def close_position(user, direction, ratio=1):
+    p = position_by_side(user, direction)
+    if not p:
+        return {"ok": True, "message": "無倉可平"}
 
-    if not pos:
-        return {
-            "ok": True,
-            "message": "無倉位可平",
-            "direction": direction
-        }
-
-    qty = round(pos["amount"], 4)
-
+    qty = round(p["amount"] * ratio, 4)
     side = "SELL" if direction == "LONG" else "BUY"
 
     params = {
@@ -490,13 +437,7 @@ def close_position(user, direction):
         "reduceOnly": "true"
     }
 
-    result = bingx_post(
-        "/openApi/swap/v2/trade/order",
-        user["api_key"],
-        user["api_secret"],
-        params
-    )
-
+    result = bingx_post("/openApi/swap/v2/trade/order", user, params)
     print("CLOSE_RESULT", result, flush=True)
 
     return {
@@ -509,166 +450,151 @@ def close_position(user, direction):
 
 def close_all(user):
     results = []
-
-    for direction in ["LONG", "SHORT"]:
-        if position_by_side(user, direction):
-            results.append(close_position(user, direction))
-
+    for d in ["LONG", "SHORT"]:
+        if position_by_side(user, d):
+            results.append(close_position(user, d))
     return results
-
-
-def reset_user_state(s):
-    s["stage"] = "IDLE"
-    s["main_direction"] = None
-    s["hedge_direction"] = None
-    s["created_at"] = int(time.time())
 
 
 def run_strategy_for_user(user_id, user):
     state = load_state()
-    s = user_state(state, user_id)
+    s = get_state(state, user_id)
 
     sig = strategy_signal(user)
-    stage = s.get("stage", "IDLE")
-
-    long_pos = position_by_side(user, "LONG")
-    short_pos = position_by_side(user, "SHORT")
-    units = total_units(user)
+    stage = s["stage"]
 
     result = {
         "user": user_id,
         "stage": stage,
         "signal": sig,
-        "units": units,
         "action_taken": "WAIT"
     }
 
-    if stage == "IDLE":
-        if long_pos or short_pos:
-            result["reason"] = "已有倉位，等待狀態同步，不重複開倉"
-            save_state(state)
-            return result
+    if s.get("mistakes_today", 0) >= 2:
+        result["reason"] = "今日判錯2次，停手"
+        save_state(state)
+        return result
 
-        if sig["action"] in ["LONG", "SHORT"] and units < MAX_UNITS:
+    main = s.get("main_direction")
+    hedge = s.get("hedge_direction")
+
+    # 1. 等待訊號，開第一筆試倉
+    if stage == "IDLE":
+        if position_by_side(user, "LONG") or position_by_side(user, "SHORT"):
+            result["reason"] = "已有倉位，先不開新單"
+        elif sig["action"] in ["LONG", "SHORT"]:
             order = market_order(user, sig["action"], 1)
-            if order.get("ok"):
+            if order["ok"]:
                 s["stage"] = "FIRST_ENTRY"
                 s["main_direction"] = sig["action"]
                 s["hedge_direction"] = opposite(sig["action"])
                 result["action_taken"] = "第一筆試倉"
                 result["order"] = order
-            else:
-                result["order_error"] = order
 
+    # 2. 第一單：+10% 開反向鎖倉；-10% 強制平倉重來
     elif stage == "FIRST_ENTRY":
-        main = s["main_direction"]
         pnl = pnl_percent(user, main)
-
         result["main_pnl"] = pnl
 
-        if pnl is not None and pnl >= 10:
-            hedge = opposite(main)
+        if pnl is not None and pnl <= -10:
+            result["close"] = close_position(user, main)
+            s["mistakes_today"] = s.get("mistakes_today", 0) + 1
+            reset_state(s)
+            result["action_taken"] = "第一單-10%，強制平倉重來"
+
+        elif pnl is not None and pnl >= 10:
             order = market_order(user, hedge, 1)
-            if order.get("ok"):
+            if order["ok"]:
                 s["stage"] = "HEDGE_LOCK"
-                s["hedge_direction"] = hedge
-                result["action_taken"] = "獲利10%，開反向鎖倉"
+                result["action_taken"] = "第一單+10%，開反向鎖倉"
                 result["order"] = order
 
+    # 3. 鎖倉中：原獲利單+50%且技術轉向，平獲利單，加碼反向1單位
     elif stage == "HEDGE_LOCK":
-        main = s["main_direction"]
-        hedge = s["hedge_direction"]
-
         main_pnl = pnl_percent(user, main)
         result["main_pnl"] = main_pnl
 
-        reverse_confirm = (
+        reverse_ok = (
             sig["action"] == hedge
             and sig["confirm_15m"]
             and sig["one_h"]["score"] >= MIN_SCORE
         )
 
-        if main_pnl is not None and main_pnl >= 50 and reverse_confirm:
-            close_result = close_position(user, main)
-            add_result = market_order(user, hedge, 1)
+        if main_pnl is not None and main_pnl >= 50 and reverse_ok:
+            close_win = close_position(user, main)
+            add_loss_side = market_order(user, hedge, 1)
 
-            if close_result.get("ok") and add_result.get("ok"):
+            if close_win["ok"] and add_loss_side["ok"]:
                 s["stage"] = "LEFT_2_LOSS"
                 s["main_direction"] = hedge
                 s["hedge_direction"] = opposite(hedge)
-                result["action_taken"] = "獲利50%轉向，平獲利單，留下2單位"
-                result["close"] = close_result
-                result["add"] = add_result
+                result["action_taken"] = "原單+50%且轉向，平獲利單，加碼反向1單位，剩2單位"
+                result["close_win"] = close_win
+                result["add"] = add_loss_side
 
+    # 4. 剩2單位：轉盈+5%全平；若虧損-30%，回補原方向2單位救援
     elif stage == "LEFT_2_LOSS":
         main = s["main_direction"]
-        hedge = opposite(main)
-
+        hedge = s["hedge_direction"]
         pnl = pnl_percent(user, main)
-        result["main_pnl"] = pnl
+        result["left_2_pnl"] = pnl
 
         if pnl is not None and pnl >= 5:
             result["close_all"] = close_all(user)
-            reset_user_state(s)
-            result["action_taken"] = "2單位轉虧為盈5%，全平重新循環"
+            reset_state(s)
+            result["action_taken"] = "2單位轉盈5%，全平重新循環"
 
         elif pnl is not None and pnl <= -30:
             order = market_order(user, hedge, 2)
-            if order.get("ok"):
-                s["stage"] = "ADD_REVERSE_2"
-                s["hedge_direction"] = hedge
-                result["action_taken"] = "虧損30%，反向進場2單位"
+            if order["ok"]:
+                s["stage"] = "RESCUE_2"
+                s["rescue_direction"] = hedge
+                s["rescue_entry"] = get_price(user)
+                result["action_taken"] = "2單位虧損-30%，反向進場2單位"
                 result["order"] = order
 
-    elif stage == "ADD_REVERSE_2":
-        hedge = s["hedge_direction"]
-        main = s["main_direction"]
+    # 5. 救援2單位：這2單位獲利+20%，平掉，再回補原虧損方向2單位，攤平成4單位
+    elif stage == "RESCUE_2":
+        rescue = s["rescue_direction"]
+        rescue_pnl = pnl_from_entry(user, rescue, s.get("rescue_entry", 0))
+        result["rescue_pnl"] = rescue_pnl
 
-        hedge_pnl = pnl_percent(user, hedge)
-        result["hedge_pnl"] = hedge_pnl
+        if rescue_pnl is not None and rescue_pnl >= 20:
+            close_rescue = close_position(user, rescue)
+            add_original = market_order(user, opposite(rescue), 2)
 
-        if hedge_pnl is not None and hedge_pnl >= 20:
-            close_result = close_position(user, hedge)
-            add_result = market_order(user, main, 2)
-
-            if close_result.get("ok") and add_result.get("ok"):
+            if close_rescue["ok"] and add_original["ok"]:
                 s["stage"] = "FINAL_4"
-                result["action_taken"] = "反向2單位獲利20%，平倉後加碼原方向2單位，形成4單位"
-                result["close"] = close_result
-                result["add"] = add_result
+                s["main_direction"] = opposite(rescue)
+                result["action_taken"] = "救援2單位+20%，平救援單，再回補原方向2單位，形成4單位"
+                result["close_rescue"] = close_rescue
+                result["add_original"] = add_original
 
+    # 6. 最終4單位：停利5%，停損50%
     elif stage == "FINAL_4":
         main = s["main_direction"]
         pnl = pnl_percent(user, main)
-        result["main_pnl"] = pnl
+        result["final_4_pnl"] = pnl
 
         if pnl is not None and pnl >= 5:
             result["close_all"] = close_all(user)
-            reset_user_state(s)
-            result["action_taken"] = "最終4單位停利5%，全平重新循環"
+            reset_state(s)
+            result["action_taken"] = "最終4單位停利5%，全平重來"
 
         elif pnl is not None and pnl <= -50:
             result["close_all"] = close_all(user)
-            reset_user_state(s)
-            result["action_taken"] = "最終4單位虧損50%，強制平倉重新循環"
+            s["mistakes_today"] = s.get("mistakes_today", 0) + 1
+            reset_state(s)
+            result["action_taken"] = "最終4單位-50%，強制平倉重來"
 
+    s["updated_at"] = int(time.time())
     save_state(state)
     return result
 
 
 def token_ok(user=None):
     token = request.args.get("token", "")
-
-    if token == MASTER_TOKEN:
-        return True
-
-    if TRADE_TOKEN and token == TRADE_TOKEN:
-        return True
-
-    if user and token == user.get("trade_token", ""):
-        return True
-
-    return False
+    return token == MASTER_TOKEN or (user and token == user.get("trade_token", ""))
 
 
 @app.route("/")
@@ -679,74 +605,46 @@ def home():
 @app.route("/users")
 def users():
     if request.args.get("token") != MASTER_TOKEN:
-        return jsonify({"ok": False, "error": "master_token錯誤"})
-
-    users_data = load_users()
-
-    return jsonify({
-        "ok": True,
-        "users": list(users_data.keys())
-    })
-
-
-@app.route("/user/<user_id>/balance")
-def user_balance(user_id):
-    user = get_user(user_id)
-
-    if not user:
-        return jsonify({"ok": False, "error": "找不到 user"})
-
-    return jsonify(
-        bingx_get(
-            "/openApi/swap/v2/user/balance",
-            user["api_key"],
-            user["api_secret"]
-        )
-    )
-
-
-@app.route("/user/<user_id>/positions")
-def user_positions(user_id):
-    user = get_user(user_id)
-
-    if not user:
-        return jsonify({"ok": False, "error": "找不到 user"})
-
-    return jsonify(get_positions_raw(user))
+        return jsonify({"ok": False, "error": "token錯誤"})
+    return jsonify({"ok": True, "users": list(load_users().keys())})
 
 
 @app.route("/user/<user_id>/signal")
 def user_signal(user_id):
-    user = get_user(user_id)
-
+    user = load_users().get(user_id)
     if not user:
         return jsonify({"ok": False, "error": "找不到 user"})
-
     return jsonify(strategy_signal(user))
 
 
 @app.route("/user/<user_id>/state")
-def show_state(user_id):
+def user_state_view(user_id):
     state = load_state()
-    return jsonify(user_state(state, user_id))
+    return jsonify(get_state(state, user_id))
 
 
 @app.route("/user/<user_id>/reset_state")
-def reset_state(user_id):
+def user_reset_state(user_id):
     if request.args.get("token") != MASTER_TOKEN:
         return jsonify({"ok": False, "error": "token錯誤"})
-
     state = load_state()
-    s = user_state(state, user_id)
-    reset_user_state(s)
+    s = get_state(state, user_id)
+    reset_state(s)
     save_state(state)
-
     return jsonify({"ok": True, "state": s})
+
+
+@app.route("/user/<user_id>/positions")
+def user_positions(user_id):
+    user = load_users().get(user_id)
+    if not user:
+        return jsonify({"ok": False, "error": "找不到 user"})
+    return jsonify(get_positions_raw(user))
 
 
 @app.route("/user/<user_id>/auto_trade")
 def user_auto_trade(user_id):
-    user = get_user(user_id)
+    user = load_users().get(user_id)
 
     if not user:
         return jsonify({"ok": False, "error": "找不到 user"})
@@ -757,17 +655,16 @@ def user_auto_trade(user_id):
     if not user.get("enabled", False):
         return jsonify({"ok": False, "error": "此用戶未啟用"})
 
-    result = run_strategy_for_user(user_id, user)
-    return jsonify({"ok": True, "result": result})
+    return jsonify({"ok": True, "result": run_strategy_for_user(user_id, user)})
 
 
 @app.route("/run_all")
 def run_all():
     if request.args.get("token") != MASTER_TOKEN:
-        return jsonify({"ok": False, "error": "master_token錯誤"})
+        return jsonify({"ok": False, "error": "token錯誤"})
 
-    users_data = load_users()
     results = {}
+    users_data = load_users()
 
     for user_id, user in users_data.items():
         if not user.get("enabled", False):
@@ -779,10 +676,7 @@ def run_all():
         except Exception as e:
             results[user_id] = {"ok": False, "error": str(e)}
 
-    return jsonify({
-        "ok": True,
-        "results": results
-    })
+    return jsonify({"ok": True, "results": results})
 
 
 def run_bot_job():
@@ -807,7 +701,6 @@ def run_bot_job():
 def cron():
     if request.args.get("token") != MASTER_TOKEN:
         return Response("BAD", status=403, mimetype="text/plain")
-
     threading.Thread(target=run_bot_job).start()
     return Response("OK", status=200, mimetype="text/plain")
 
@@ -816,7 +709,6 @@ def cron():
 def cron204():
     if request.args.get("token") != MASTER_TOKEN:
         return Response("BAD", status=403, mimetype="text/plain")
-
     threading.Thread(target=run_bot_job).start()
     return "", 204
 
