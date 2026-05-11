@@ -752,4 +752,139 @@ def run_strategy_for_user(user_id, user):
         if main_pnl is not None and main_pnl >= 50 and reverse_ok:
             cancel_all_open_orders(user)
             close_win = close_position(user, main)
-            a
+            add_reverse = market_order(user, hedge, 1)
+
+            if close_win["ok"] and add_reverse["ok"]:
+                s["stage"] = "LEFT_2_LOSS"
+                s["main_direction"] = hedge
+                s["hedge_direction"] = opposite(hedge)
+                s["protection_stage"] = None
+                result["action_taken"] = "原單+50%且技術轉向，平獲利單，加碼反向1單位"
+                result["close_win"] = close_win
+                result["add_reverse"] = add_reverse
+                result["protection"] = ensure_stage_protection(user, s)
+
+    s["updated_at"] = int(time.time())
+    save_state(state)
+    return result
+
+
+def token_ok(user=None):
+    token = request.args.get("token", "")
+    return token == MASTER_TOKEN or (user and token == user.get("trade_token", ""))
+
+
+@app.route("/")
+def home():
+    return "BTC BingX Bot 已啟動"
+
+
+@app.route("/ping")
+def ping():
+    return "ok", 200
+
+
+@app.route("/users")
+def users():
+    if request.args.get("token") != MASTER_TOKEN:
+        return jsonify({"ok": False, "error": "token錯誤"})
+    return jsonify({"ok": True, "users": list(load_users().keys())})
+
+
+@app.route("/user/<user_id>/signal")
+def user_signal(user_id):
+    user = load_users().get(user_id)
+    if not user:
+        return jsonify({"ok": False, "error": "找不到 user"})
+    return jsonify(strategy_signal(user))
+
+
+@app.route("/user/<user_id>/state")
+def user_state_view(user_id):
+    state = load_state()
+    return jsonify(get_state(state, user_id))
+
+
+@app.route("/user/<user_id>/positions")
+def user_positions(user_id):
+    user = load_users().get(user_id)
+    if not user:
+        return jsonify({"ok": False, "error": "找不到 user"})
+    return jsonify(get_positions_raw(user))
+
+
+@app.route("/user/<user_id>/reset_state")
+def user_reset_state(user_id):
+    if request.args.get("token") != MASTER_TOKEN:
+        return jsonify({"ok": False, "error": "token錯誤"})
+
+    state = load_state()
+    s = get_state(state, user_id)
+    cancel_all_open_orders(load_users()[user_id])
+    reset_state(s)
+    save_state(state)
+
+    return jsonify({"ok": True, "state": s})
+
+
+@app.route("/user/<user_id>/auto_trade")
+def user_auto_trade(user_id):
+    user = load_users().get(user_id)
+
+    if not user:
+        return jsonify({"ok": False, "error": "找不到 user"})
+
+    if not token_ok(user):
+        return jsonify({"ok": False, "error": "token錯誤"})
+
+    if not user.get("enabled", False):
+        return jsonify({"ok": False, "error": "此用戶未啟用"})
+
+    return jsonify({"ok": True, "result": run_strategy_for_user(user_id, user)})
+
+
+@app.route("/run_all")
+def run_all():
+    if request.args.get("token") != MASTER_TOKEN:
+        return jsonify({"ok": False, "error": "token錯誤"})
+
+    results = {}
+
+    for user_id, user in load_users().items():
+        if not user.get("enabled", False):
+            results[user_id] = {"ok": False, "message": "未啟用"}
+            continue
+
+        try:
+            results[user_id] = run_strategy_for_user(user_id, user)
+        except Exception as e:
+            results[user_id] = {"ok": False, "error": str(e)}
+
+    return jsonify({"ok": True, "results": results})
+
+
+def run_bot_job():
+    try:
+        for user_id, user in load_users().items():
+            if not user.get("enabled", False):
+                continue
+            try:
+                result = run_strategy_for_user(user_id, user)
+                print("BOT_RESULT", user_id, result, flush=True)
+            except Exception as e:
+                print("BOT_ERROR", user_id, str(e), flush=True)
+    except Exception as e:
+        print("RUN_BOT_ERROR", str(e), flush=True)
+
+
+@app.route("/cron204")
+def cron204():
+    if request.args.get("token") != MASTER_TOKEN:
+        return Response("BAD", status=403, mimetype="text/plain")
+
+    threading.Thread(target=run_bot_job).start()
+    return "", 204
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
