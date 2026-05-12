@@ -90,7 +90,12 @@ def open_long_market():
 # =========================
 @app.route("/")
 def home():
-    return "ok"
+    return {
+        "API_KEY_EXISTS": bool(API_KEY),
+        "SECRET_KEY_EXISTS": bool(SECRET_KEY),
+        "API_KEY_HEAD": API_KEY[:5] if API_KEY else "NONE",
+        "SECRET_KEY_HEAD": SECRET_KEY[:5] if SECRET_KEY else "NONE",
+    }
 
 
 @app.route("/test_long")
