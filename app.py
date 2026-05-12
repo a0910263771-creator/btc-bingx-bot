@@ -11,10 +11,10 @@ BASE_URL = "https://open-api.bingx.com"
 symbol = "BTC-USDT"
 
 # ===== 下單參數 =====
-side = "BUY"
+side = "LONG"
 positionSide = "LONG"
 
-margin = 100   # 1單位USDT
+margin = 5   # 1單位USDT
 leverage = 30
 
 # ===== 設定槓桿 =====
