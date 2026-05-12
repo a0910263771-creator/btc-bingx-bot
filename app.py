@@ -10,8 +10,8 @@ app = Flask(__name__)
 # =========================
 # 環境變數
 # =========================
-API_KEY = os.getenv("DyI5UFtDsDyeXtdF7fwxfgorc4JkrfUjqZdAI0vfpV8PVwXnlGU2CmvuNDvcmCTIUUoPKoh0sXiDfNPLVrNg", "")
-SECRET_KEY = os.getenv("p96JagTP7WynYX8xuhPbF0djW65cIBjQH2w2zXQgLTOEPMGlAKFw4eZDl8fN1KyfNgi28TdzhA5KmMeEJA", "")
+API_KEY = os.getenv("BINGX_API_KEY", "")
+SECRET_KEY = os.getenv("BINGX_SECRET_KEY", "")
 
 BASE_URL = "https://open-api.bingx.com"
 SYMBOL = "BTC-USDT"
