@@ -74,13 +74,13 @@ def set_leverage_long():
 # =========================
 def open_long_market():
     path = "/openApi/swap/v2/trade/order"
-
     params = {
         "symbol": SYMBOL,
-        "side": "LONG",
+        "side": "BUY",
+        "positionSide": "LONG",
         "type": "MARKET",
         "quantity": QUANTITY,
-    }
+}
 
     return bingx_post(path, params)
 
