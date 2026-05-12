@@ -109,7 +109,7 @@ def set_leverage_long():
 
     params = {
         "symbol": SYMBOL,
-        "side": "LONG",
+        "side": "BUY",
         "leverage": LEVERAGE
     }
 
@@ -125,7 +125,7 @@ def set_leverage_short():
 
     params = {
         "symbol": SYMBOL,
-        "side": "SHORT",
+        "side": "SELL",
         "leverage": LEVERAGE
     }
 
