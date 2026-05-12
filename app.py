@@ -49,25 +49,23 @@ def sign_params(params):
 # BingX POST
 # =========================
 def bingx_post(path, params):
-
     params["timestamp"] = int(time.time() * 1000)
 
-    signature = sign_params(params)
+    query = "&".join([f"{k}={params[k]}" for k in sorted(params)])
 
-    params["signature"] = signature
+    signature = hmac.new(
+        SECRET_KEY.encode("utf-8"),
+        query.encode("utf-8"),
+        hashlib.sha256
+    ).hexdigest()
+
+    url = BASE_URL + path + "?" + query + "&signature=" + signature
 
     headers = {
         "X-BX-APIKEY": API_KEY
     }
 
-    url = BASE_URL + path
-
-    response = requests.post(
-        url,
-        params=params,
-        headers=headers
-    )
-
+    response = requests.post(url, headers=headers)
     return response.json()
 
 
@@ -75,28 +73,26 @@ def bingx_post(path, params):
 # BingX GET
 # =========================
 def bingx_get(path, params=None):
-
     if params is None:
         params = {}
 
     params["timestamp"] = int(time.time() * 1000)
 
-    signature = sign_params(params)
+    query = "&".join([f"{k}={params[k]}" for k in sorted(params)])
 
-    params["signature"] = signature
+    signature = hmac.new(
+        SECRET_KEY.encode("utf-8"),
+        query.encode("utf-8"),
+        hashlib.sha256
+    ).hexdigest()
+
+    url = BASE_URL + path + "?" + query + "&signature=" + signature
 
     headers = {
         "X-BX-APIKEY": API_KEY
     }
 
-    url = BASE_URL + path
-
-    response = requests.get(
-        url,
-        params=params,
-        headers=headers
-    )
-
+    response = requests.get(url, headers=headers)
     return response.json()
 
 
