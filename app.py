@@ -51,7 +51,7 @@ params = {
     "side": side,
     "positionSide": positionSide,
     "type": "MARKET",
-    "quantity": margin,
+    "quantity": 0.001,
     "timestamp": int(time.time() * 1000)
 }
 
