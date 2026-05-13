@@ -29,12 +29,20 @@ ADD_QTY = 0.001
 # =========================================
 
 def sign_params(params):
-    query = urlencode(sorted(params.items()))
-    return hmac.new(
-        SECRET_KEY.encode(),
-        query.encode(),
+
+    sorted_params = sorted(params.items())
+
+    query_string = "&".join(
+        [f"{k}={v}" for k, v in sorted_params]
+    )
+
+    signature = hmac.new(
+        SECRET_KEY.encode("utf-8"),
+        query_string.encode("utf-8"),
         hashlib.sha256
     ).hexdigest()
+
+    return signature
 
 # =========================================
 # POST
