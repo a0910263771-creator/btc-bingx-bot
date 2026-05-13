@@ -1,4 +1,5 @@
 from flask import Flask
+import os
 import requests
 import time
 import hmac
@@ -11,8 +12,8 @@ app = Flask(__name__)
 # BingX API
 # =========================================
 
-API_KEY = "你的API_KEY"
-SECRET_KEY = "你的SECRET_KEY"
+API_KEY = os.getenv("BINGX_API_KEY", "")
+SECRET_KEY = os.getenv("BINGX_SECRET_KEY", "")
 
 BASE_URL = "https://open-api.bingx.com"
 
