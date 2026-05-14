@@ -348,13 +348,11 @@ def monitor_core():
             })
 
     return {
-        "ok": True,
-        "stage": "monitor",
-        "long_qty": long_qty,
-        "short_qty": short_qty,
-        "long_avg": long_avg,
-        "short_avg": short_avg,
-        "actions": actions
+    "ok": True,
+    "stage": "monitor",
+    "long_qty": long_qty,
+    "short_qty": short_qty,
+    "actions_count": len(actions)
     }
 
 
