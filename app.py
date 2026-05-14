@@ -488,7 +488,30 @@ def monitor():
 def status():
     positions_result = get_positions()
     orders_result = get_open_orders()
+@app.route("/pause")
+def pause():
+    global AUTO_ENABLED
 
+    AUTO_ENABLED = False
+
+    return jsonify({
+        "ok": True,
+        "auto_enabled": AUTO_ENABLED,
+        "msg": "AUTO TRADING PAUSED"
+    })
+
+
+@app.route("/resume")
+def resume():
+    global AUTO_ENABLED
+
+    AUTO_ENABLED = True
+
+    return jsonify({
+        "ok": True,
+        "auto_enabled": AUTO_ENABLED,
+        "msg": "AUTO TRADING RESUMED"
+    })
     return jsonify({
         "ok": True,
         "auto_enabled": AUTO_ENABLED,
