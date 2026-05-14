@@ -3,6 +3,7 @@ import time
 import hmac
 import hashlib
 import threading
+import math
 import requests
 from flask import Flask, jsonify
 
@@ -15,12 +16,15 @@ BASE_URL = "https://open-api.bingx.com"
 SYMBOL = "BTC-USDT"
 
 LEVERAGE = 30
-FIRST_QTY = 0.001
-ADD_QTY = 0.001
+CAPITAL_UNITS = 4
+MAX_USED_UNITS = 3
 
 FIRST_TARGET = 0.20
 MERGED_TP = 0.05
 MERGED_SL = 0.20
+
+QTY_STEP = 0.0001
+MIN_QTY = 0.0001
 
 AUTO_ENABLED = True
 LOOP_SECONDS = 30
@@ -48,10 +52,7 @@ def bingx_request(method, path, params=None):
     signature = sign_query(query)
 
     url = BASE_URL + path + "?" + query + "&signature=" + signature
-
-    headers = {
-        "X-BX-APIKEY": API_KEY
-    }
+    headers = {"X-BX-APIKEY": API_KEY}
 
     if method == "GET":
         response = requests.get(url, headers=headers, timeout=20)
@@ -65,10 +66,7 @@ def bingx_request(method, path, params=None):
     try:
         return response.json()
     except Exception:
-        return {
-            "status_code": response.status_code,
-            "text": response.text
-        }
+        return {"status_code": response.status_code, "text": response.text}
 
 
 def bingx_get(path, params=None):
@@ -81,6 +79,90 @@ def bingx_post(path, params=None):
 
 def bingx_delete(path, params=None):
     return bingx_request("DELETE", path, params)
+
+
+def floor_qty(qty):
+    return math.floor(qty / QTY_STEP) * QTY_STEP
+
+
+def get_price():
+    result = bingx_get("/openApi/swap/v2/quote/price", {
+        "symbol": SYMBOL
+    })
+
+    try:
+        return float(result["data"]["price"])
+    except Exception:
+        return 0
+
+
+def find_number(obj, keys):
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k in keys:
+                try:
+                    return float(v)
+                except Exception:
+                    pass
+
+        for v in obj.values():
+            found = find_number(v, keys)
+            if found is not None:
+                return found
+
+    if isinstance(obj, list):
+        for item in obj:
+            found = find_number(item, keys)
+            if found is not None:
+                return found
+
+    return None
+
+
+def get_available_usdt():
+    result = bingx_get("/openApi/swap/v2/user/balance")
+
+    available = find_number(result, [
+        "availableMargin",
+        "availableBalance",
+        "available",
+        "balance"
+    ])
+
+    if available is None:
+        return 0, result
+
+    return available, result
+
+
+def calculate_unit_qty():
+    price = get_price()
+    available_usdt, balance_result = get_available_usdt()
+
+    if price <= 0 or available_usdt <= 0:
+        return {
+            "ok": False,
+            "price": price,
+            "available_usdt": available_usdt,
+            "balance_result": balance_result,
+            "qty": 0
+        }
+
+    unit_margin = available_usdt / CAPITAL_UNITS
+    notional = unit_margin * LEVERAGE
+    raw_qty = notional / price
+    qty = floor_qty(raw_qty)
+
+    if qty < MIN_QTY:
+        qty = MIN_QTY
+
+    return {
+        "ok": True,
+        "price": price,
+        "available_usdt": available_usdt,
+        "unit_margin": unit_margin,
+        "qty": round(qty, 4)
+    }
 
 
 def set_leverage(side):
@@ -169,15 +251,11 @@ def cancel_all_open_orders():
         order_id = o.get("orderId")
 
         if order_id:
-            cancelled.append({
-                "orderId": order_id,
-                "result": cancel_order(order_id)
-            })
+            cancelled.append(cancel_order(order_id))
             time.sleep(0.2)
 
     return {
-        "open_orders_before": result,
-        "cancelled": cancelled
+        "count": len(cancelled)
     }
 
 
@@ -237,11 +315,22 @@ def has_long_protection():
 
 
 def phase1_core():
+    qty_info = calculate_unit_qty()
+
+    if not qty_info["ok"]:
+        return {
+            "ok": False,
+            "error": "無法計算單位下單數量",
+            "qty_info": qty_info
+        }
+
+    unit_qty = qty_info["qty"]
+
     set_leverage("BUY")
     set_leverage("SELL")
 
-    long_order = market_order("BUY", "LONG", FIRST_QTY)
-    short_order = market_order("SELL", "SHORT", FIRST_QTY)
+    long_order = market_order("BUY", "LONG", unit_qty)
+    short_order = market_order("SELL", "SHORT", unit_qty)
 
     time.sleep(1)
 
@@ -255,9 +344,7 @@ def phase1_core():
         return {
             "ok": False,
             "error": "無法取得多空均價",
-            "long_order": long_order,
-            "short_order": short_order,
-            "positions": positions_result
+            "unit_qty": unit_qty
         }
 
     move = FIRST_TARGET / LEVERAGE
@@ -265,17 +352,21 @@ def phase1_core():
     upper_price = long_avg * (1 + move)
     lower_price = short_avg * (1 - move)
 
-    close_long_limit = limit_order("SELL", "LONG", upper_price, FIRST_QTY)
-    add_short_limit = limit_order("SELL", "SHORT", upper_price, ADD_QTY)
+    close_long_limit = limit_order("SELL", "LONG", upper_price, unit_qty)
+    add_short_limit = limit_order("SELL", "SHORT", upper_price, unit_qty)
 
-    close_short_limit = limit_order("BUY", "SHORT", lower_price, FIRST_QTY)
-    add_long_limit = limit_order("BUY", "LONG", lower_price, ADD_QTY)
+    close_short_limit = limit_order("BUY", "SHORT", lower_price, unit_qty)
+    add_long_limit = limit_order("BUY", "LONG", lower_price, unit_qty)
 
     return {
         "ok": True,
         "stage": "phase1",
-        "long_avg": long_avg,
-        "short_avg": short_avg,
+        "capital_units": CAPITAL_UNITS,
+        "max_used_units": MAX_USED_UNITS,
+        "unit_qty": unit_qty,
+        "unit_margin": qty_info["unit_margin"],
+        "available_usdt": qty_info["available_usdt"],
+        "price": qty_info["price"],
         "upper_price": round(upper_price, 1),
         "lower_price": round(lower_price, 1),
         "long_order": long_order,
@@ -298,61 +389,43 @@ def monitor_core():
 
     actions = []
 
-    if short_qty >= FIRST_QTY + ADD_QTY:
+    if short_qty > 0 and long_qty == 0:
         if not has_short_protection():
-            cancel_result = cancel_all_open_orders()
+            cancel_all_open_orders()
 
             tp_price = short_avg * (1 - MERGED_TP / LEVERAGE)
             sl_price = short_avg * (1 + MERGED_SL / LEVERAGE)
 
-            tp_order = limit_order("BUY", "SHORT", tp_price, short_qty)
-            sl_order = stop_market_order("BUY", "SHORT", sl_price, short_qty)
+            limit_order("BUY", "SHORT", tp_price, short_qty)
+            stop_market_order("BUY", "SHORT", sl_price, short_qty)
 
-            actions.append({
-                "mode": "short_merged",
-                "cancel": cancel_result,
-                "tp_price": round(tp_price, 1),
-                "sl_price": round(sl_price, 1),
-                "tp_order": tp_order,
-                "sl_order": sl_order
-            })
+            actions.append("short_protection_set")
 
-    elif long_qty >= FIRST_QTY + ADD_QTY:
+    elif long_qty > 0 and short_qty == 0:
         if not has_long_protection():
-            cancel_result = cancel_all_open_orders()
+            cancel_all_open_orders()
 
             tp_price = long_avg * (1 + MERGED_TP / LEVERAGE)
             sl_price = long_avg * (1 - MERGED_SL / LEVERAGE)
 
-            tp_order = limit_order("SELL", "LONG", tp_price, long_qty)
-            sl_order = stop_market_order("SELL", "LONG", sl_price, long_qty)
+            limit_order("SELL", "LONG", tp_price, long_qty)
+            stop_market_order("SELL", "LONG", sl_price, long_qty)
 
-            actions.append({
-                "mode": "long_merged",
-                "cancel": cancel_result,
-                "tp_price": round(tp_price, 1),
-                "sl_price": round(sl_price, 1),
-                "tp_order": tp_order,
-                "sl_order": sl_order
-            })
+            actions.append("long_protection_set")
 
     elif long_qty == 0 and short_qty == 0:
         open_orders = extract_orders(get_open_orders())
 
         if len(open_orders) == 0:
-            restart = phase1_core()
-
-            actions.append({
-                "mode": "auto_restart_phase1",
-                "restart": restart
-            })
+            phase1_core()
+            actions.append("auto_restart_phase1")
 
     return {
-    "ok": True,
-    "stage": "monitor",
-    "long_qty": long_qty,
-    "short_qty": short_qty,
-    "actions_count": len(actions)
+        "ok": True,
+        "stage": "monitor",
+        "long_qty": long_qty,
+        "short_qty": short_qty,
+        "actions_count": len(actions)
     }
 
 
@@ -389,10 +462,15 @@ def home():
 
 @app.route("/test")
 def test():
+    qty_info = calculate_unit_qty()
+
     return jsonify({
         "API_KEY_EXISTS": bool(API_KEY),
         "SECRET_KEY_EXISTS": bool(SECRET_KEY),
-        "auto_enabled": AUTO_ENABLED
+        "auto_enabled": AUTO_ENABLED,
+        "capital_units": CAPITAL_UNITS,
+        "max_used_units": MAX_USED_UNITS,
+        "qty_info": qty_info
     })
 
 
