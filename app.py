@@ -313,33 +313,107 @@ def parse_positions(result):
 
 
 def has_short_protection():
-    orders = extract_orders(get_open_orders())
 
-    tp = False
-    sl = False
+    orders=extract_orders(
+        get_open_orders()
+    )
+
+    tp=False
+    sl=False
 
     for o in orders:
-        if o.get("positionSide") == "SHORT" and o.get("side") == "BUY":
-            if o.get("type") == "LIMIT":
-                tp = True
-            if "STOP" in str(o.get("type")):
-                sl = True
+
+        side=str(
+            o.get(
+                "side",""
+            )
+        )
+
+        position=str(
+            o.get(
+                "positionSide",""
+            )
+        )
+
+        order_type=str(
+            o.get(
+                "type",""
+            )
+        )
+
+        reduce_only=str(
+            o.get(
+                "reduceOnly",False
+            )
+        )
+
+        if (
+            position=="SHORT"
+            and side=="BUY"
+            and reduce_only=="True"
+        ):
+
+            if order_type=="LIMIT":
+                tp=True
+
+            if (
+                "STOP"
+                in order_type
+            ):
+                sl=True
 
     return tp and sl
 
 
 def has_long_protection():
-    orders = extract_orders(get_open_orders())
 
-    tp = False
-    sl = False
+    orders=extract_orders(
+        get_open_orders()
+    )
+
+    tp=False
+    sl=False
 
     for o in orders:
-        if o.get("positionSide") == "LONG" and o.get("side") == "SELL":
-            if o.get("type") == "LIMIT":
-                tp = True
-            if "STOP" in str(o.get("type")):
-                sl = True
+
+        side=str(
+            o.get(
+                "side",""
+            )
+        )
+
+        position=str(
+            o.get(
+                "positionSide",""
+            )
+        )
+
+        order_type=str(
+            o.get(
+                "type",""
+            )
+        )
+
+        reduce_only=str(
+            o.get(
+                "reduceOnly",False
+            )
+        )
+
+        if (
+            position=="LONG"
+            and side=="SELL"
+            and reduce_only=="True"
+        ):
+
+            if order_type=="LIMIT":
+                tp=True
+
+            if (
+                "STOP"
+                in order_type
+            ):
+                sl=True
 
     return tp and sl
 
