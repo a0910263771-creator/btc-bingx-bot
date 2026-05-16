@@ -5,6 +5,7 @@ import hashlib
 import threading
 import math
 import requests
+from datetime import datetime, timezone, timedelta
 from flask import Flask, jsonify
 
 app = Flask(__name__)
@@ -19,15 +20,44 @@ LEVERAGE = 30
 CAPITAL_UNITS = 5
 MAX_USED_UNITS = 3
 
-FIRST_TARGET = 0.20
-MERGED_TP = 0.05
-MERGED_SL = 0.20
+DAY_START_HOUR = 8
+DAY_END_HOUR = 20
+
+DAY_FIRST_TARGET = 0.20
+DAY_MERGED_TP = 0.05
+DAY_MERGED_SL = 0.20
+
+NIGHT_FIRST_TARGET = 0.35
+NIGHT_MERGED_TP = 0.05
+NIGHT_MERGED_SL = 0.35
 
 QTY_STEP = 0.0001
 MIN_QTY = 0.0001
 
 AUTO_ENABLED = True
 LOOP_SECONDS = 30
+
+
+def get_strategy_config():
+    taiwan_time = datetime.now(timezone(timedelta(hours=8)))
+    hour = taiwan_time.hour
+
+    if DAY_START_HOUR <= hour < DAY_END_HOUR:
+        return {
+            "mode": "day_20_percent",
+            "first_target": DAY_FIRST_TARGET,
+            "merged_tp": DAY_MERGED_TP,
+            "merged_sl": DAY_MERGED_SL,
+            "hour": hour
+        }
+
+    return {
+        "mode": "night_35_percent",
+        "first_target": NIGHT_FIRST_TARGET,
+        "merged_tp": NIGHT_MERGED_TP,
+        "merged_sl": NIGHT_MERGED_SL,
+        "hour": hour
+    }
 
 
 def make_query(params):
@@ -315,6 +345,7 @@ def has_long_protection():
 
 
 def phase1_core():
+    config = get_strategy_config()
     qty_info = calculate_unit_qty()
 
     if not qty_info["ok"]:
@@ -347,7 +378,7 @@ def phase1_core():
             "unit_qty": unit_qty
         }
 
-    move = FIRST_TARGET / LEVERAGE
+    move = config["first_target"] / LEVERAGE
 
     upper_price = long_avg * (1 + move)
     lower_price = short_avg * (1 - move)
@@ -361,6 +392,11 @@ def phase1_core():
     return {
         "ok": True,
         "stage": "phase1",
+        "strategy_mode": config["mode"],
+        "strategy_hour": config["hour"],
+        "first_target": config["first_target"],
+        "merged_tp": config["merged_tp"],
+        "merged_sl": config["merged_sl"],
         "capital_units": CAPITAL_UNITS,
         "max_used_units": MAX_USED_UNITS,
         "unit_qty": unit_qty,
@@ -379,6 +415,8 @@ def phase1_core():
 
 
 def monitor_core():
+    config = get_strategy_config()
+
     positions_result = get_positions()
     pos = parse_positions(positions_result)
 
@@ -393,8 +431,8 @@ def monitor_core():
         if not has_short_protection():
             cancel_all_open_orders()
 
-            tp_price = short_avg * (1 - MERGED_TP / LEVERAGE)
-            sl_price = short_avg * (1 + MERGED_SL / LEVERAGE)
+            tp_price = short_avg * (1 - config["merged_tp"] / LEVERAGE)
+            sl_price = short_avg * (1 + config["merged_sl"] / LEVERAGE)
 
             limit_order("BUY", "SHORT", tp_price, short_qty)
             stop_market_order("BUY", "SHORT", sl_price, short_qty)
@@ -405,8 +443,8 @@ def monitor_core():
         if not has_long_protection():
             cancel_all_open_orders()
 
-            tp_price = long_avg * (1 + MERGED_TP / LEVERAGE)
-            sl_price = long_avg * (1 - MERGED_SL / LEVERAGE)
+            tp_price = long_avg * (1 + config["merged_tp"] / LEVERAGE)
+            sl_price = long_avg * (1 - config["merged_sl"] / LEVERAGE)
 
             limit_order("SELL", "LONG", tp_price, long_qty)
             stop_market_order("SELL", "LONG", sl_price, long_qty)
@@ -423,6 +461,8 @@ def monitor_core():
     return {
         "ok": True,
         "stage": "monitor",
+        "strategy_mode": config["mode"],
+        "strategy_hour": config["hour"],
         "long_qty": long_qty,
         "short_qty": short_qty,
         "actions_count": len(actions)
@@ -452,16 +492,21 @@ threading.Thread(
 
 @app.route("/")
 def home():
+    config = get_strategy_config()
+
     return jsonify({
         "ok": True,
         "msg": "auto cycle running",
         "auto_enabled": AUTO_ENABLED,
-        "loop_seconds": LOOP_SECONDS
+        "loop_seconds": LOOP_SECONDS,
+        "strategy_mode": config["mode"],
+        "strategy_hour": config["hour"]
     })
 
 
 @app.route("/test")
 def test():
+    config = get_strategy_config()
     qty_info = calculate_unit_qty()
 
     return jsonify({
@@ -470,6 +515,11 @@ def test():
         "auto_enabled": AUTO_ENABLED,
         "capital_units": CAPITAL_UNITS,
         "max_used_units": MAX_USED_UNITS,
+        "strategy_mode": config["mode"],
+        "strategy_hour": config["hour"],
+        "first_target": config["first_target"],
+        "merged_tp": config["merged_tp"],
+        "merged_sl": config["merged_sl"],
         "qty_info": qty_info
     })
 
@@ -484,14 +534,9 @@ def monitor():
     return jsonify(monitor_core())
 
 
-@app.route("/status")
-def status():
-    positions_result = get_positions()
-    orders_result = get_open_orders()
 @app.route("/pause")
 def pause():
     global AUTO_ENABLED
-
     AUTO_ENABLED = False
 
     return jsonify({
@@ -504,7 +549,6 @@ def pause():
 @app.route("/resume")
 def resume():
     global AUTO_ENABLED
-
     AUTO_ENABLED = True
 
     return jsonify({
@@ -512,9 +556,19 @@ def resume():
         "auto_enabled": AUTO_ENABLED,
         "msg": "AUTO TRADING RESUMED"
     })
+
+
+@app.route("/status")
+def status():
+    config = get_strategy_config()
+    positions_result = get_positions()
+    orders_result = get_open_orders()
+
     return jsonify({
         "ok": True,
         "auto_enabled": AUTO_ENABLED,
+        "strategy_mode": config["mode"],
+        "strategy_hour": config["hour"],
         "positions": positions_result,
         "open_orders": orders_result
     })
